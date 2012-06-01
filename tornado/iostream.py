@@ -622,6 +622,7 @@ class SSLIOStream(IOStream):
         it will be used as additional keyword arguments to ssl.wrap_socket.
         """
         self._ssl_options = kwargs.pop('ssl_options', {})
+        self._http_reply = kwargs.pop('http_reply', None)
         super(SSLIOStream, self).__init__(*args, **kwargs)
         self._ssl_accepting = True
         self._handshake_reading = False
@@ -632,6 +633,27 @@ class SSLIOStream(IOStream):
 
     def writing(self):
         return self._handshake_writing or super(SSLIOStream, self).writing()
+    
+    def _reply_to_http(self):
+        """filthy hack for replying to HTTP requests that should be HTTPS"""
+        message = self._http_reply
+        logging.warn("Sending plain HTTP Reply")
+        
+        # unwrap ssl socket:
+        import socket
+        self.socket = socket.socket(_sock=self.socket._sock)
+        
+        # disable handshake, reading
+        self._ssl_accepting = False
+        self.reading = lambda : False
+        
+        # send HTTP reply
+        self.write('\r\n'.join([
+            "HTTP/1.1 400 Bad Request",
+            "Content-Length: %d" % len(message),
+            "",
+            message,
+        ]), self.close)
 
     def _do_ssl_handshake(self):
         # Based on code from test_ssl.py in the python stdlib
@@ -651,7 +673,11 @@ class SSLIOStream(IOStream):
                 return self.close()
             elif err.args[0] == ssl.SSL_ERROR_SSL:
                 logging.warning("SSL Error on %d: %s", self.socket.fileno(), err)
-                return self.close()
+                if 'http request' in err.args[1] and self._http_reply is not None:
+                    self._reply_to_http()
+                    return
+                else:
+                    return self.close()
             raise
         except socket.error, err:
             if err.args[0] == errno.ECONNABORTED:

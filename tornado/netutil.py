@@ -88,6 +88,8 @@ class TCPServer(object):
     def __init__(self, io_loop=None, ssl_options=None):
         self.io_loop = io_loop
         self.ssl_options = ssl_options
+        if ssl_options:
+            self._ssl_http_reply = ssl_options.pop('http_reply')
         self._sockets = {}  # fd -> socket object
         self._pending_sockets = []
         self._started = False
@@ -212,7 +214,9 @@ class TCPServer(object):
                     raise
         try:
             if self.ssl_options is not None:
-                stream = SSLIOStream(connection, io_loop=self.io_loop)
+                stream = SSLIOStream(connection, io_loop=self.io_loop,
+                                http_reply=self._ssl__http_reply,
+                )
             else:
                 stream = IOStream(connection, io_loop=self.io_loop)
             self.handle_stream(stream, address)
