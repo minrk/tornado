@@ -794,7 +794,8 @@ class PollIOLoop(IOLoop):
                 # Non-main thread, or the previous value of wakeup_fd
                 # is no longer valid.
                 old_wakeup_fd = None
-
+        
+        n = 0
         try:
             while True:
                 # Prevent IO event starvation by delaying new callbacks
@@ -827,8 +828,9 @@ class PollIOLoop(IOLoop):
                         self._timeouts = [x for x in self._timeouts
                                           if x.callback is not None]
                         heapq.heapify(self._timeouts)
-
-                gen_log.info('IOLoop tic %i callbacks %i timeouts', ncallbacks, len(due_timeouts))
+                
+                tic = self.time()
+                gen_log.info('IOLoop tic %i: %i callbacks %i timeouts', n, ncallbacks, len(due_timeouts))
 
                 for i in range(ncallbacks):
                     self._run_callback(self._callbacks.popleft())
@@ -852,6 +854,9 @@ class PollIOLoop(IOLoop):
                 else:
                     # No timeouts and no callbacks, so use the default.
                     poll_timeout = _POLL_TIMEOUT
+
+                gen_log.info('IOLoop toc %i: %.2f ms', n, 1e3 * (self.time() - tic))
+                n += 1
 
                 if not self._running:
                     break
