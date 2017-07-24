@@ -828,6 +828,8 @@ class PollIOLoop(IOLoop):
                                           if x.callback is not None]
                         heapq.heapify(self._timeouts)
 
+                gen_log.info('IOLoop tic %i callbacks %i timeouts', ncallbacks, len(due_timeouts))
+
                 for i in range(ncallbacks):
                     self._run_callback(self._callbacks.popleft())
                 for timeout in due_timeouts:
