@@ -1150,6 +1150,7 @@ class Runner(object):
                 # Break a reference cycle to speed GC.
                 f = None # noqa
                 self.run()
+            inner._gen = self.gen
             self.io_loop.add_future(
                 self.future, inner)
             return False

@@ -255,6 +255,11 @@ def _log_callback(f, args, kwargs):
     import types
     from tornado.log import gen_log
     from tornado import ioloop
+
+    if hasattr(f, '_gen'):
+        gen_log.info('callback: %s', f._gen.gi_code)
+        return
+
     if isinstance(f, types.MethodType):
         self = f.__self__
         f_s = '%s.%s' % (f.__self__.__class__.__name__, f.__name__)
@@ -288,8 +293,8 @@ def wrap(fn):
         # Fast path when there are no active contexts.
         def null_wrapper(*args, **kwargs):
             try:
-                _log_callback(fn, args, kwargs)
                 current_state = _state.contexts
+                _log_callback(fn, args, kwargs)
                 _state.contexts = cap_contexts[0]
                 return fn(*args, **kwargs)
             finally:
