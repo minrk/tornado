@@ -251,6 +251,22 @@ def _remove_deactivated(contexts):
 
     return (stack_contexts, head)
 
+def _log_callback(f, args, kwargs):
+    import types
+    from tornado.log import gen_log
+    from tornado import ioloop
+    if isinstance(f, types.MethodType):
+        self = f.__self__
+        f_s = '%s.%s' % (f.__self__.__class__.__name__, f.__name__)
+    else:
+        f_s = f.__name__
+    args_s = ', '.join(repr(arg) for arg in args)
+    kwargs_s = ', '.join('%s=%r' % (k, v) for k,v in kwargs.items())
+    if args_s and kwargs_s:
+        args_s = ', '.join((args_s, kwargs_s))
+    elif kwargs_s:
+        args_s = kwargs_s
+    gen_log.info("callback: %s(%s)", f_s, args_s)
 
 def wrap(fn):
     """Returns a callable object that will restore the current `StackContext`
@@ -272,6 +288,7 @@ def wrap(fn):
         # Fast path when there are no active contexts.
         def null_wrapper(*args, **kwargs):
             try:
+                _log_callback(fn, args, kwargs)
                 current_state = _state.contexts
                 _state.contexts = cap_contexts[0]
                 return fn(*args, **kwargs)
@@ -313,6 +330,7 @@ def wrap(fn):
             # Execute callback if no exception happened while restoring state
             if top is None:
                 try:
+                    _log_callback(fn, args, kwargs)
                     ret = fn(*args, **kwargs)
                 except:
                     exc = sys.exc_info()

@@ -1029,7 +1029,9 @@ class PeriodicCallback(object):
     def _run(self):
         if not self._running:
             return
+        from .stack_context import _log_callback
         try:
+            _log_callback(self.callback, (), {})
             return self.callback()
         except Exception:
             self.io_loop.handle_callback_exception(self.callback)
