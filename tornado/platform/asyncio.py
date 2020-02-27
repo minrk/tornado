@@ -26,6 +26,7 @@ import functools
 import itertools
 import sys
 import threading
+import time
 import typing
 from tornado.gen import convert_yielded
 from tornado.ioloop import IOLoop, _Selectable
@@ -81,7 +82,9 @@ class BaseAsyncIOLoop(IOLoop):
         ):
             # Ignore this line for mypy because the abstract method checker
             # doesn't understand dynamic proxies.
-            self.selector_loop = AddThreadSelectorEventLoop(asyncio_loop)  # type: ignore
+            self.selector_loop = AddThreadSelectorEventLoop(
+                asyncio_loop
+            )  # type: ignore
         # Maps fd to (fileobj, handler function) pair (as in IOLoop.add_handler)
         self.handlers = {}  # type: Dict[int, Tuple[Union[int, _Selectable], Callable]]
         # Set of fds listening for reads/writes
@@ -424,6 +427,8 @@ class AddThreadSelectorEventLoop(asyncio.AbstractEventLoop):
         "_handle_event_from_selector",
         "_reader_seq",
         "_writer_seq",
+        "_reader_fut",
+        "_writer_fut",
     }
 
     def __init__(self, real_loop: asyncio.AbstractEventLoop) -> None:
@@ -435,6 +440,12 @@ class AddThreadSelectorEventLoop(asyncio.AbstractEventLoop):
         # sequence number.
         self._reader_seq = {}  # type: Dict[_FileDescriptorLike, int]
         self._writer_seq = {}  # type: Dict[_FileDescriptorLike, int]
+        self._reader_fut = (
+            {}
+        )  # type: Dict[Tuple[_FileDescriptorLike, int], Optional[concurrent.futures.Future]]
+        self._writer_fut = (
+            {}
+        )  # type: Dict[Tuple[_FileDescriptorLike, int], Optional[concurrent.futures.Future]]
 
         fut = (
             concurrent.futures.Future()
@@ -502,17 +513,37 @@ class AddThreadSelectorEventLoop(asyncio.AbstractEventLoop):
     ) -> None:
         seq = next(_seq_gen)
         self._reader_seq[fd] = seq
+        fut_key = (fd, seq)
+        self._reader_fut[fut_key] = None
 
-        def wrapper() -> None:
+        def main_wrapper() -> None:
+            # called in the real loop, asynchronously
             if self._reader_seq.get(fd, None) != seq:
                 return
-            callback(*args)
+            fut = self._reader_fut[fut_key]
+            try:
+                callback(*args)
+            finally:
+                # signal to selector that the callback has completed
+                if fut:
+                    fut.set_result(None)
+
+        def selector_wrapper() -> None:
+            # called in selector, schedules callback on real_loop
+            if self._reader_seq.get(fd, None) != seq:
+                return
+            fut = self._reader_fut.get(fut_key, None)
+            if fut and not fut.done():
+                # reader triggered while callback has not fired
+                # block selector loop for 1ms while waiting for callback to finish
+                time.sleep(1e-3)
+                return
+            # Create Future so we know when we are done
+            self._reader_fut[fut_key] = concurrent.futures.Future()
+            self._real_loop.call_soon_threadsafe(main_wrapper)
 
         return self._run_on_selector(
-            self._selector_loop.add_reader,
-            fd,
-            self._real_loop.call_soon_threadsafe,
-            wrapper,
+            self._selector_loop.add_reader, fd, selector_wrapper
         )
 
     def add_writer(
@@ -520,23 +551,44 @@ class AddThreadSelectorEventLoop(asyncio.AbstractEventLoop):
     ) -> None:
         seq = next(_seq_gen)
         self._writer_seq[fd] = seq
+        fut_key = (fd, seq)
+        self._writer_fut[fut_key] = None
 
-        def wrapper() -> None:
+        def main_wrapper() -> None:
+            # called in the main loop, asynchronously
             if self._writer_seq.get(fd, None) != seq:
                 return
-            callback(*args)
+            fut = self._writer_fut[fut_key]
+            try:
+                callback(*args)
+            finally:
+                # signal to selector that the callback has completed
+                if fut:
+                    fut.set_result(None)
+
+        def selector_wrapper() -> None:
+            if self._writer_seq.get(fd, None) != seq:
+                return
+            fut = self._writer_fut.get(fut_key, None)
+            if fut and not fut.done():
+                # writer triggered while callback has not fired
+                # block selector loop for 1ms while waiting for callback to finish
+                time.sleep(1e-3)
+                return
+            # Create Future so we know when we are done
+            self._writer_fut[fut_key] = concurrent.futures.Future()
+            self._real_loop.call_soon_threadsafe(main_wrapper)
 
         return self._run_on_selector(
-            self._selector_loop.add_writer,
-            fd,
-            self._real_loop.call_soon_threadsafe,
-            wrapper,
+            self._selector_loop.add_writer, fd, selector_wrapper
         )
 
     def remove_reader(self, fd: _FileDescriptorLike) -> None:
-        del self._reader_seq[fd]
+        seq = self._reader_seq.pop(fd)
+        del self._reader_fut[(fd, seq)]
         return self._run_on_selector(self._selector_loop.remove_reader, fd)
 
     def remove_writer(self, fd: _FileDescriptorLike) -> None:
-        del self._writer_seq[fd]
+        seq = self._writer_seq.pop(fd)
+        del self._writer_fut[(fd, seq)]
         return self._run_on_selector(self._selector_loop.remove_writer, fd)
