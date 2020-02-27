@@ -35,10 +35,16 @@ from typing import Any, TypeVar, Awaitable, Callable, Union, Optional
 if typing.TYPE_CHECKING:
     from typing import Set, Dict, Tuple  # noqa: F401
 
+try:
+    from typing import Protocol
+except ImportError:
+    # typing.Protocol is new in 3.8
+    from typing import Type as Protocol
+
 _T = TypeVar("_T")
 
 
-class _HasFileno(typing.Protocol):
+class _HasFileno(Protocol):
     def fileno(self) -> int:
         pass
 
@@ -71,7 +77,7 @@ class BaseAsyncIOLoop(IOLoop):
         # as windows where the default event loop does not implement these methods.
         self.selector_loop = asyncio_loop
         if hasattr(asyncio, "ProactorEventLoop") and isinstance(
-            asyncio_loop, asyncio.ProactorEventLoop
+            asyncio_loop, asyncio.ProactorEventLoop  # type: ignore
         ):
             # Ignore this line for mypy because the abstract method checker
             # doesn't understand dynamic proxies.
